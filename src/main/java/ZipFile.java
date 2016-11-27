@@ -2,16 +2,18 @@ import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 /**
  * Created by TiM on 24.11.2016.
  */
-public class ZipFile {
+public class ZipFile extends Thread {
 
     private ZipOutputStream zOut;
     private FileInputStream file;
+    private String zipName;
     private String[] files;
 
     public ZipFile(String zipName, String[] files) throws FileNotFoundException {
@@ -20,13 +22,39 @@ public class ZipFile {
         for (String fileName: files){
             System.out.println(fileName);
         }
-        this.zOut = new ZipOutputStream(new FileOutputStream(zipName));
         this.files = files;
+        this.zipName = zipName;
     }
 
-    public void zip() throws IOException {
+    @Override
+    public void run() {
+        BlockedFiles bf = BlockedFiles.getInstance();
+        if (bf.addFilesToBlock(files)){
+            if (bf.addZipToBlock(zipName)){
+                try {
+                    this.zOut = new ZipOutputStream(new FileOutputStream(zipName));
+                    zip();
+                } catch (IOException e) {
+                    System.out.println("Zip error");
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                } finally {
+                    bf.removeFiles(files);
+                    bf.removeZip(zipName);
+                }
+                System.out.println("Zip complete");
+            } else {
+                System.out.println("File in work");
+            }
+        } else {
+            System.out.println("Files in work");
+        }
+    }
+
+    public void zip() throws IOException, InterruptedException {
         System.out.println("Zip start");
         for (String fileName: files){
+            ArrayBlockingQueue<byte[]> queue = new ArrayBlockingQueue<byte[]>(10);
             long start = System.nanoTime();
             file = new FileInputStream(fileName);
             int fileSize = file.available();
@@ -34,16 +62,13 @@ public class ZipFile {
             String shortFileName = fileName.substring(fileName.lastIndexOf("\\") + 1);
             System.out.println(shortFileName);
             ZipEntry zipEntry = new ZipEntry(shortFileName);
-            zipEntry.setSize(file.available());
             zOut.putNextEntry(zipEntry);
-            byte[] bytes = new byte[2048];
-            int readed;
-
-            while ((readed = file.read(bytes)) > 0){
-                zOut.write(bytes);
-                    System.out.println(fileSize-=readed);
-
-            }
+            Reader reader = new Reader(file, queue);
+            Writer writer = new Writer(zOut, queue);
+            reader.start();
+            writer.start();
+            reader.join();
+            writer.join();
             zOut.closeEntry();
             file.close();
             System.out.println("Ok");
@@ -51,7 +76,6 @@ public class ZipFile {
             System.out.println("Zipped time: " + (finish - start)/1000000 + " ms");
         }
         zOut.close();
-        System.out.println("Zip complete");
     }
 
 }
